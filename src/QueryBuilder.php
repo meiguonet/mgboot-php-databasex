@@ -23,6 +23,7 @@ final class QueryBuilder
 
     private function __construct(string $tableName = '')
     {
+        $this->tableName = $tableName;
     }
 
     private function __clone(): void
