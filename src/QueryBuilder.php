@@ -12,7 +12,7 @@ use mgboot\util\StringUtils;
 
 final class QueryBuilder
 {
-    private string $tableName = '';
+    private string $tableName;
     private array $fields = [];
     private array $joins = [];
     private array $conditions = [];
