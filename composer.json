@@ -16,9 +16,6 @@
   },
   "require": {
     "php": ">=8.0.0",
-    "psr/log": "^1.1.4",
-    "meiguonet/mgboot-php-common": "^1.0.0",
-    "meiguonet/mgboot-php-poolx": "^1.0.0",
-    "illuminate/support": "^8.40.0"
+    "meiguonet/mgboot-php-poolx": "^1.0.5"
   }
 }

@@ -4,12 +4,11 @@ namespace mgboot\databasex;
 
 use DateTime;
 use Illuminate\Support\Collection;
-use mgboot\common\ArrayUtils;
-use mgboot\common\Cast;
-use mgboot\common\DateTimeFormat;
-use mgboot\common\Regexp;
-use mgboot\common\StringUtils;
-use PDO;
+use mgboot\Cast;
+use mgboot\constant\DateTimeFormat;
+use mgboot\constant\Regexp;
+use mgboot\util\ArrayUtils;
+use mgboot\util\StringUtils;
 
 final class QueryBuilder
 {
@@ -1103,17 +1102,17 @@ final class QueryBuilder
         return [implode('', $sb), $this->params];
     }
 
-    public function get(string|array|null $fields = null, ?PDO $pdo = null): Collection
+    public function get(string|array|null $fields = null): Collection
     {
         if ($fields !== null) {
             $this->fields($fields);
         }
 
         list($sql, $params) = $this->buildForSelect();
-        return DB::selectBySql($sql, $params, $pdo);
+        return DB::selectBySql($sql, $params);
     }
 
-    public function first(string|array|null $fields = null, ?PDO $pdo = null): ?array
+    public function first(string|array|null $fields = null): ?array
     {
         if ($fields !== null) {
             $this->fields($fields);
@@ -1121,12 +1120,12 @@ final class QueryBuilder
 
         $this->limit(1);
         list($sql, $params) = $this->buildForSelect();
-        return DB::firstBySql($sql, $params, $pdo);
+        return DB::firstBySql($sql, $params);
     }
 
-    public function value(string $columnName, ?PDO $pdo = null): mixed
+    public function value(string $columnName): mixed
     {
-        $data = $this->first($columnName, $pdo);
+        $data = $this->first($columnName);
 
         if (!ArrayUtils::isAssocArray($data)) {
             return null;
@@ -1135,40 +1134,40 @@ final class QueryBuilder
         return $data[$columnName] ?? null;
     }
 
-    public function intValue(string $columnName, int $defaultValue = PHP_INT_MIN, ?PDO $pdo = null): int
+    public function intValue(string $columnName, int $defaultValue = PHP_INT_MIN): int
     {
-        return Cast::toInt($this->value($columnName, $pdo), $defaultValue);
+        return Cast::toInt($this->value($columnName), $defaultValue);
     }
 
-    public function stringValue(string $columnName, ?PDO $pdo = null): string
+    public function stringValue(string $columnName): string
     {
-        return Cast::toString($this->value($columnName, $pdo));
+        return Cast::toString($this->value($columnName));
     }
 
-    public function count(string $countField = '*', ?PDO $pdo = null): int
+    public function count(string $countField = '*'): int
     {
         list($sql, $params) = $this->buildForCount($countField);
-        return DB::countBySql($sql, $params, $pdo);
+        return DB::countBySql($sql, $params);
     }
 
-    public function exists(string $countField = '*', ?PDO $pdo = null): bool
+    public function exists(string $countField = '*'): bool
     {
-        return $this->count($countField, $pdo) > 0;
+        return $this->count($countField) > 0;
     }
 
-    public function insert(array $data, ?PDO $pdo = null): int
+    public function insert(array $data): int
     {
         list($sql, $prams) = $this->buildForInsert($data);
-        return DB::insertBySql($sql, $prams, $pdo);
+        return DB::insertBySql($sql, $prams);
     }
 
-    public function update(array $data, ?PDO $pdo = null): int
+    public function update(array $data): int
     {
         list($sql, $params) = $this->buildForUpdate($data);
-        return DB::updateBySql($sql, $params, $pdo);
+        return DB::updateBySql($sql, $params);
     }
 
-    public function sofeDelete(?PDO $pdo = null): void
+    public function sofeDelete(): void
     {
         $schemas = collect(DB::getTableSchema($this->tableName));
 
@@ -1180,16 +1179,16 @@ final class QueryBuilder
             return;
         }
 
-        $this->update(['delFlag' => 1], $pdo);
+        $this->update(['delFlag' => 1]);
     }
 
-    public function delete(?PDO $pdo = null): int
+    public function delete(): int
     {
         list($sql, $params) = $this->buildForDelete();
-        return DB::deleteBySql($sql, $params, $pdo);
+        return DB::deleteBySql($sql, $params);
     }
 
-    public function incr(string $fieldName, int|float|string $num, ?PDO $pdo = null): int {
+    public function incr(string $fieldName, int|float|string $num): int {
         if (is_float($num) || is_string($num)) {
             $num = bcadd($num, 0, 2);
 
@@ -1200,10 +1199,10 @@ final class QueryBuilder
             return 0;
         }
 
-        return $this->update([$fieldName => DB::raw("$fieldName + $num")], $pdo);
+        return $this->update([$fieldName => DB::raw("$fieldName + $num")]);
     }
 
-    public function decr(string $fieldName, int|float|string $num, ?PDO $pdo = null): int {
+    public function decr(string $fieldName, int|float|string $num): int {
         if (is_float($num) || is_string($num)) {
             $num = bcadd($num, 0, 2);
 
@@ -1214,13 +1213,13 @@ final class QueryBuilder
             return 0;
         }
 
-        return $this->update([$fieldName => DB::raw("$fieldName - $num")], $pdo);
+        return $this->update([$fieldName => DB::raw("$fieldName - $num")]);
     }
 
-    public function sum(string $fieldName, ?PDO $pdo = null): int|float|string
+    public function sum(string $fieldName): int|float|string
     {
         list($sql, $params) = $this->buildForSum($fieldName);
-        return DB::sumBySql($sql, $params, $pdo);
+        return DB::sumBySql($sql, $params);
     }
 
     private function getFullTableNameOrFullFieldName(string|Expression $arg0): string

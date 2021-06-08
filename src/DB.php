@@ -2,22 +2,22 @@
 
 namespace mgboot\databasex;
 
-use Closure;
 use Illuminate\Support\Collection;
-use mgboot\common\AppConf;
-use mgboot\common\Cast;
-use mgboot\common\ExceptionUtils;
-use mgboot\common\FileUtils;
-use mgboot\common\JsonUtils;
-use mgboot\common\Regexp;
-use mgboot\common\StringUtils;
-use mgboot\common\Swoole;
+use mgboot\AppConf;
+use mgboot\Cast;
+use mgboot\constant\Regexp;
 use mgboot\poolx\ConnectionInterface;
 use mgboot\poolx\PdoConnection;
 use mgboot\poolx\PoolContext;
+use mgboot\swoole\Swoole;
+use mgboot\util\ExceptionUtils;
+use mgboot\util\FileUtils;
+use mgboot\util\JsonUtils;
+use mgboot\util\StringUtils;
 use PDO;
 use PDOStatement;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 use Throwable;
 
 final class DB
@@ -202,12 +202,14 @@ final class DB
         return Expression::create($expr);
     }
 
-    public static function selectBySql(string $sql, array $params = [], ?PDO $pdo = null): Collection
+    public static function selectBySql(string $sql, array $params = []): Collection
     {
         self::logSql($sql, $params);
 
         try {
-            list($conn, $pdo) = self::getConnection($pdo);
+            /* @var PdoConnection $conn */
+            /* @var PDO $pdo */
+            list($conn, $pdo) = self::getConnection();
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -240,12 +242,14 @@ final class DB
         }
     }
 
-    public static function firstBySql(string $sql, array $params = [], ?PDO $pdo = null): ?array
+    public static function firstBySql(string $sql, array $params = []): ?array
     {
         self::logSql($sql, $params);
 
         try {
-            list($conn, $pdo) = self::getConnection($pdo);
+            /* @var PdoConnection $conn */
+            /* @var PDO $pdo */
+            list($conn, $pdo) = self::getConnection();
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -278,12 +282,14 @@ final class DB
         }
     }
 
-    public static function countBySql(string $sql, array $params = [], ?PDO $pdo = null): int
+    public static function countBySql(string $sql, array $params = []): int
     {
         self::logSql($sql, $params);
 
         try {
-            list($conn, $pdo) = self::getConnection($pdo);
+            /* @var PdoConnection $conn */
+            /* @var PDO $pdo */
+            list($conn, $pdo) = self::getConnection();
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -315,12 +321,14 @@ final class DB
         }
     }
 
-    public static function insertBySql(string $sql, array $params = [], ?PDO $pdo = null): int
+    public static function insertBySql(string $sql, array $params = []): int
     {
         self::logSql($sql, $params);
 
         try {
-            list($conn, $pdo) = self::getConnection($pdo);
+            /* @var PdoConnection $conn */
+            /* @var PDO $pdo */
+            list($conn, $pdo) = self::getConnection();
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -356,12 +364,14 @@ final class DB
         }
     }
 
-    public static function updateBySql(string $sql, array $params = [], ?PDO $pdo = null): int
+    public static function updateBySql(string $sql, array $params = []): int
     {
         self::logSql($sql, $params);
 
         try {
-            list($conn, $pdo) = self::getConnection($pdo);
+            /* @var PdoConnection $conn */
+            /* @var PDO $pdo */
+            list($conn, $pdo) = self::getConnection();
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -397,12 +407,14 @@ final class DB
         }
     }
 
-    public static function sumBySql(string $sql, array $params = [], ?PDO $pdo = null): int|float|string
+    public static function sumBySql(string $sql, array $params = []): int|float|string
     {
         self::logSql($sql, $params);
 
         try {
-            list($conn, $pdo) = self::getConnection($pdo);
+            /* @var PdoConnection $conn */
+            /* @var PDO $pdo */
+            list($conn, $pdo) = self::getConnection();
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -456,17 +468,19 @@ final class DB
         }
     }
 
-    public static function deleteBySql(string $sql, array $params = [], ?PDO $pdo = null): int
+    public static function deleteBySql(string $sql, array $params = []): int
     {
-        return self::updateBySql($sql, $params, $pdo);
+        return self::updateBySql($sql, $params);
     }
 
-    public static function executeSql(string $sql, array $params = [], ?PDO $pdo = null): void
+    public static function executeSql(string $sql, array $params = []): void
     {
         self::logSql($sql, $params);
 
         try {
-            list($conn, $pdo) = self::getConnection($pdo);
+            /* @var PdoConnection $conn */
+            /* @var PDO $pdo */
+            list($conn, $pdo) = self::getConnection();
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
@@ -497,49 +511,54 @@ final class DB
         }
     }
 
-    public static function transations(Closure $closure): void
+    public static function transations(callable $callback): void
     {
         try {
-            /* @var PdoConnection $conn */
-            /* @var PDO $pdo */
-            list($conn, $pdo) = self::getConnection();
+            if (Swoole::inCoroutineMode(true)) {
+                $conn = PoolContext::getConnection(PoolContext::POOL_TYPE_DB, 2.0);
+            } else {
+                $conn = PdoConnection::create(self::$connectionSettings);
+            }
+
+            if (!($conn instanceof PdoConnection)) {
+                throw new RuntimeException('fail to get database connection');
+            }
         } catch (Throwable $ex) {
             $ex = self::wrapAsDbException($ex);
             self::writeErrorLog($ex);
             throw $ex;
         }
 
-        $hasError = null;
+        /* @var PdoConnection $conn */
+        $conn->inTranstionMode(true);
+        TxManager::addConnection($conn);
 
         try {
-            $conn->inTranstionMode(true);
-            $pdo->beginTransaction();
-            $closure->call($pdo);
-            $pdo->commit();
+            $conn->getRealConnection()->beginTransaction();
+            $callback();
+            $conn->getRealConnection()->commit();
+            self::freeConnection($conn);
         } catch (Throwable $ex) {
-            $conn->inTranstionMode(false);
-            $pdo->rollBack();
-            $hasError = true;
+            $conn->getRealConnection()->rollBack();
             $ex = self::wrapAsDbException($ex);
             self::freeConnection($conn, $ex);
             self::writeErrorLog($ex);
             throw $ex;
         } finally {
             $conn->inTranstionMode(false);
-
-            if (!$hasError) {
-                self::freeConnection($conn);
-            }
+            TxManager::removeConnection();
         }
     }
 
-    private static function getConnection(?PDO $pdo = null): array
+    private static function getConnection(): array
     {
-        if ($pdo instanceof PDO) {
-            return [null, $pdo];
+        $conn = TxManager::getConnection();
+
+        if ($conn instanceof ConnectionInterface) {
+            return [$conn, $conn->getRealConnection()];
         }
 
-        if (Swoole::inCoroutineMode()) {
+        if (Swoole::inCoroutineMode(true)) {
             $conn = PoolContext::getConnection(PoolContext::POOL_TYPE_DB, 2.0);
         } else {
             $conn = PdoConnection::create(self::$connectionSettings);
@@ -550,7 +569,7 @@ final class DB
 
     private static function freeConnection(mixed $conn, ?Throwable $ex = null): void
     {
-        if ($conn instanceof ConnectionInterface) {
+        if ($conn instanceof ConnectionInterface && !$conn->inTranstionMode()) {
             $conn->free($ex);
         }
     }
