@@ -23,8 +23,10 @@ use Throwable;
 final class DB
 {
     private static ?LoggerInterface $logger;
-    private static array $connectionSettings = [];
     private static bool $debugLogEnabled = false;
+    private static array $connectionSettings = [];
+    private static array $goBackendSettings = [];
+    private static bool $poolEnabled = false;
     private static string $tableSchemasCacheFile = 'classpath:cache/table_schemas.php';
     private static array $tableSchemas = [];
 
@@ -36,18 +38,44 @@ final class DB
     {
     }
 
-    public static function setLogger(LoggerInterface $logger): void
+    public static function withLogger(LoggerInterface $logger): void
     {
         self::$logger = $logger;
-    }
-
-    public static function setConnectionSettings(array $settings): void{
-        self::$connectionSettings = $settings;
     }
 
     public static function enableDebugLog(): void
     {
         self::$debugLogEnabled = true;
+    }
+
+    public static function withConnectionSettings(array $settings): void{
+        self::$connectionSettings = $settings;
+    }
+
+    public static function enableGoBackend(array $settings): void
+    {
+        if (empty($settings)) {
+            return;
+        }
+
+        $host = Cast::toString($settings['host']);
+
+        if (empty($host)) {
+            return;
+        }
+
+        $port = Cast::toInt($settings['port']);
+
+        if ($port < 1) {
+            return;
+        }
+
+        self::$goBackendSettings = compact('host', 'port');
+    }
+
+    public static function enablePool(): void
+    {
+        self::$poolEnabled = true;
     }
 
     public static function buildTableSchemas(): array
@@ -206,6 +234,18 @@ final class DB
     {
         self::logSql($sql, $params);
 
+        if (self::goBackendEnabled() && !self::inTranstionMode()) {
+            list($result, $errorTips) = self::sendToGoBackend('@@select', $sql, $params);
+
+            if (!empty($errorTips)) {
+                $ex = new DbException(null, $errorTips);
+                self::writeErrorLog($ex);
+                throw $ex;
+            }
+
+            return collect(JsonUtils::arrayFrom($result));
+        }
+
         try {
             /* @var PdoConnection $conn */
             /* @var PDO $pdo */
@@ -245,6 +285,19 @@ final class DB
     public static function firstBySql(string $sql, array $params = []): ?array
     {
         self::logSql($sql, $params);
+
+        if (self::goBackendEnabled() && !self::inTranstionMode()) {
+            list($result, $errorTips) = self::sendToGoBackend('@@first', $sql, $params);
+
+            if (!empty($errorTips)) {
+                $ex = new DbException(null, $errorTips);
+                self::writeErrorLog($ex);
+                throw $ex;
+            }
+
+            $map1 = JsonUtils::mapFrom($result);
+            return is_array($map1) ? $map1 : null;
+        }
 
         try {
             /* @var PdoConnection $conn */
@@ -286,6 +339,18 @@ final class DB
     {
         self::logSql($sql, $params);
 
+        if (self::goBackendEnabled() && !self::inTranstionMode()) {
+            list($result, $errorTips) = self::sendToGoBackend('@@count', $sql, $params);
+
+            if (!empty($errorTips)) {
+                $ex = new DbException(null, $errorTips);
+                self::writeErrorLog($ex);
+                throw $ex;
+            }
+
+            return Cast::toInt($result, 0);
+        }
+
         try {
             /* @var PdoConnection $conn */
             /* @var PDO $pdo */
@@ -324,6 +389,18 @@ final class DB
     public static function insertBySql(string $sql, array $params = []): int
     {
         self::logSql($sql, $params);
+
+        if (self::goBackendEnabled() && !self::inTranstionMode()) {
+            list($result, $errorTips) = self::sendToGoBackend('@@insert', $sql, $params);
+
+            if (!empty($errorTips)) {
+                $ex = new DbException(null, $errorTips);
+                self::writeErrorLog($ex);
+                throw $ex;
+            }
+
+            return Cast::toInt($result, 0);
+        }
 
         try {
             /* @var PdoConnection $conn */
@@ -368,6 +445,18 @@ final class DB
     {
         self::logSql($sql, $params);
 
+        if (self::goBackendEnabled() && !self::inTranstionMode()) {
+            list($result, $errorTips) = self::sendToGoBackend('@@update', $sql, $params);
+
+            if (!empty($errorTips)) {
+                $ex = new DbException(null, $errorTips);
+                self::writeErrorLog($ex);
+                throw $ex;
+            }
+
+            return Cast::toInt($result, -1);
+        }
+
         try {
             /* @var PdoConnection $conn */
             /* @var PDO $pdo */
@@ -410,6 +499,25 @@ final class DB
     public static function sumBySql(string $sql, array $params = []): int|float|string
     {
         self::logSql($sql, $params);
+
+        if (self::goBackendEnabled() && !self::inTranstionMode()) {
+            list($result, $errorTips) = self::sendToGoBackend('@@sum', $sql, $params);
+
+            if (!empty($errorTips)) {
+                $ex = new DbException(null, $errorTips);
+                self::writeErrorLog($ex);
+                throw $ex;
+            }
+
+            $map1 = JsonUtils::mapFrom($result);
+
+            if (!is_array($map1)) {
+                return '0.00';
+            }
+
+            $num = $map1['sum'];
+            return is_int($num) || is_float($num) ? $num : bcadd($num, 0, 2);
+        }
 
         try {
             /* @var PdoConnection $conn */
@@ -476,6 +584,18 @@ final class DB
     public static function executeSql(string $sql, array $params = []): void
     {
         self::logSql($sql, $params);
+
+        if (self::goBackendEnabled() && !self::inTranstionMode()) {
+            list(, $errorTips) = self::sendToGoBackend('@@execute', $sql, $params);
+
+            if (!empty($errorTips)) {
+                $ex = new DbException(null, $errorTips);
+                self::writeErrorLog($ex);
+                throw $ex;
+            }
+
+            return;
+        }
 
         try {
             /* @var PdoConnection $conn */
@@ -550,6 +670,16 @@ final class DB
         }
     }
 
+    private static function goBackendEnabled(): bool
+    {
+        return !empty(self::$goBackendSettings);
+    }
+
+    private static function inTranstionMode(): bool
+    {
+        return TxManager::getConnection() instanceof ConnectionInterface;
+    }
+
     private static function getConnection(): array
     {
         $conn = TxManager::getConnection();
@@ -558,7 +688,7 @@ final class DB
             return [$conn, $conn->getRealConnection()];
         }
 
-        if (Swoole::inCoroutineMode(true)) {
+        if (self::$poolEnabled && Swoole::inCoroutineMode(true)) {
             $conn = PoolContext::getConnection(PoolContext::POOL_TYPE_DB, 2.0);
         } else {
             $conn = PdoConnection::create(self::$connectionSettings);
@@ -664,6 +794,91 @@ final class DB
         }
 
         mkdir($dir, 0755, true);
+    }
+
+    private static function sendToGoBackend(string $cmd, string $query, array $params): array
+    {
+        $host = self::$goBackendSettings['host'];
+        $port = (int) self::$goBackendSettings['port'];
+
+        $timeout = match ($cmd) {
+            '@@select' => 120.0,
+            '@@first', '@@count', '@@sum' => 10.0,
+            default => 5.0
+        };
+
+        $maxPkgLength = match ($cmd) {
+            '@@select' => 8 * 1024 * 1024,
+            '@@first' => 16 * 1024,
+            default => 256
+        };
+
+        $msg = "@@db:$cmd:$query";
+
+        if (!empty($params)) {
+            $msg .= '@^sep^@' . JsonUtils::toJson($params);
+        }
+
+        if (Swoole::inCoroutineMode(true)) {
+            $settings = [
+                'connect_timeout' => 0.5,
+                'write_timeout' => 2.0,
+                'read_timeout' => $timeout,
+                'package_max_length' => $maxPkgLength
+            ];
+
+            $client = Swoole::newTcpClient($host, $port, $settings);
+
+            try {
+                Swoole::tcpClientSend($client, $msg);
+                $result = Cast::toString(Swoole::tcpClientRecv($client));
+                $result = trim(str_replace('@^@end', '', $result));
+
+                if (str_starts_with($result, '@@error:')) {
+                    return ['', str_replace('@@error:', '', $result)];
+                }
+
+                return [$result, ''];
+            } catch (Throwable $ex) {
+                return ['', $ex->getMessage()];
+            } finally {
+                Swoole::tcpClientClose($client);
+            }
+        }
+
+        $fp = fsockopen($host, $port);
+
+        if (!is_resource($fp)) {
+            return ['', ''];
+        }
+
+        try {
+            stream_set_timeout($fp, $timeout);
+            fwrite($fp, $msg);
+            $sb = [];
+
+            while (!feof($fp)) {
+                $buf = fread($fp, $maxPkgLength);
+
+                if (!is_string($buf)) {
+                    continue;
+                }
+
+                $sb[] = $buf;
+            }
+
+            $result = trim(str_replace('@^@end', '', implode('', $sb)));
+
+            if (str_starts_with($result, '@@error:')) {
+                return ['', str_replace('@@error:', '', $result)];
+            }
+
+            return [$result, ''];
+        } catch (Throwable $ex) {
+            return ['', $ex->getMessage()];
+        } finally {
+            fclose($fp);
+        }
     }
 
     private static function wrapAsDbException(Throwable $ex): DbException
