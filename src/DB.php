@@ -27,7 +27,7 @@ final class DB
     private static array $connectionSettings = [];
     private static array $goBackendSettings = [];
     private static bool $poolEnabled = false;
-    private static string $tableSchemasCacheFile = 'classpath:cache/table_schemas.php';
+    private static string $cacheDir = 'classpath:cache';
     private static array $tableSchemas = [];
 
     private function __construct()
@@ -78,128 +78,22 @@ final class DB
         self::$poolEnabled = true;
     }
 
-    public static function buildTableSchemas(): array
+    public static function withCacheDir(string $dir): void
+    {
+        if ($dir !== '' && is_dir($dir) && is_writable($dir)) {
+            self::$cacheDir = $dir;
+        }
+    }
+
+    public static function buildTableSchemas(): void
     {
         $inDevMode = AppConf::getEnv() === 'dev';
-        $inSwooleMode = Swoole::getWorkerId() > 0;
-        $key = Swoole::buildGlobalVarKey();
-        $schemas = [];
 
-        if (!$inDevMode && !$inSwooleMode) {
-            $schemas = self::getTableSchemasFromCacheFile();
+        if ($inDevMode) {
+            return;
         }
 
-        if (is_array($schemas) && !empty($schemas)) {
-            self::$tableSchemas[$key] = $schemas;
-            return $schemas;
-        }
-
-        try {
-            $conn = PdoConnection::create(self::$connectionSettings);
-        } catch (Throwable) {
-            return [];
-        }
-
-        $tables = [];
-
-        try {
-            $stmt = $conn->getRealConnection()->prepare('SHOW TABLES');
-            $stmt->execute();
-            $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            if (!is_array($records) || empty($records)) {
-                $conn->close();
-                return [];
-            }
-
-            foreach ($records as $record) {
-                foreach ($record as $key => $value) {
-                    if (str_contains($key, 'Tables_in')) {
-                        $tables[] = trim($value);
-                        break;
-                    }
-                }
-            }
-        } catch (Throwable) {
-            $conn->close();
-            return [];
-        }
-
-        if (empty($tables)) {
-            $conn->close();
-            return [];
-        }
-
-        $schemas = [];
-
-        foreach ($tables as $tableName) {
-            try {
-                $stmt = $conn->getRealConnection()->prepare("DESC $tableName");
-                $stmt->execute();
-                $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-                if (!is_array($items) || empty($items)) {
-                    continue;
-                }
-
-                $schema = collect($items)->map(function ($item) {
-                    $fieldName = $item['Field'];
-                    $nullable = stripos($item['Null'], 'YES') !== false;
-                    $isPrimaryKey = $item['Key'] === 'PRI';
-                    $defaultValue = $item['Default'];
-                    $autoIncrement = $item['Extra'] === 'auto_increment';
-                    $parts = preg_split(Regexp::SPACE_SEP, $item['Type']);
-
-                    if (str_contains($parts[0], '(')) {
-                        $fieldType = StringUtils::substringBefore($parts[0], '(');
-                        $fieldSize = str_replace($fieldType, '', $parts[0]);
-                    } else {
-                        $fieldType = $parts[0];
-                        $fieldSize = '';
-                    }
-
-                    if (!str_starts_with($fieldSize, '(') || !str_ends_with($fieldSize, ')')) {
-                        $fieldSize = '';
-                    } else {
-                        $fieldSize = rtrim(ltrim($fieldSize, '('), ')');
-                    }
-
-                    if (is_numeric($fieldSize)) {
-                        $fieldSize = (int) $fieldSize;
-                    }
-
-                    $unsigned = stripos($item['Type'], 'unsigned') !== false;
-
-                    return compact(
-                        'fieldName',
-                        'fieldType',
-                        'fieldSize',
-                        'unsigned',
-                        'nullable',
-                        'defaultValue',
-                        'autoIncrement',
-                        'isPrimaryKey'
-                    );
-                })->toArray();
-            } catch (Throwable) {
-                $schema = null;
-            }
-
-            if (!is_array($schema) || empty($schema)) {
-                continue;
-            }
-
-            $schemas[$tableName] = $schema;
-        }
-
-        $conn->close();
-        self::$tableSchemas[$key] = $schemas;
-
-        if (!$inDevMode && !$inSwooleMode) {
-            self::writeTableSchemasToCacheFile($schemas);
-        }
-
-        return $schemas;
+        self::$tableSchemas = self::buildTableSchemasFromCacheFile();
     }
 
     public static function getTableSchema(string $tableName): array
@@ -210,11 +104,15 @@ final class DB
             $tableName = StringUtils::substringAfterLast($tableName, '.');
         }
 
-        $key = Swoole::buildGlobalVarKey();
-        $schemas = self::$tableSchemas[$key];
+        if (AppConf::getEnv() === 'dev') {
+            $schemas = self::buildTableSchemasInternal();
+        } else {
+            $schemas = self::$tableSchemas;
 
-        if (!is_array($schemas) || empty($schemas)) {
-            $schemas = self::buildTableSchemas();
+            if (empty($schemas)) {
+                self::buildTableSchemas();
+                $schemas = self::$tableSchemas;
+            }
         }
 
         return is_array($schemas) && isset($schemas[$tableName]) ? $schemas[$tableName] : [];
@@ -750,24 +648,151 @@ final class DB
         }
     }
 
-    private static function getTableSchemasFromCacheFile(): array
+    private static function buildTableSchemasInternal(): array
     {
-        $cacheFile = FileUtils::getRealpath(self::$tableSchemasCacheFile);
-        self::buildTableSchemasCacheFileDir($cacheFile);
-
         try {
-            $schemas = include($cacheFile);
+            $conn = PdoConnection::create(self::$connectionSettings);
         } catch (Throwable) {
-            $schemas = [];
+            return [];
         }
 
-        return is_array($schemas) ? $schemas : [];
+        $tables = [];
+
+        try {
+            $stmt = $conn->getRealConnection()->prepare('SHOW TABLES');
+            $stmt->execute();
+            $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            if (!is_array($records) || empty($records)) {
+                $conn->close();
+                return [];
+            }
+
+            foreach ($records as $record) {
+                foreach ($record as $key => $value) {
+                    if (str_contains($key, 'Tables_in')) {
+                        $tables[] = trim($value);
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable) {
+            $conn->close();
+            return [];
+        }
+
+        if (empty($tables)) {
+            $conn->close();
+            return [];
+        }
+
+        $schemas = [];
+
+        foreach ($tables as $tableName) {
+            try {
+                $stmt = $conn->getRealConnection()->prepare("DESC $tableName");
+                $stmt->execute();
+                $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                if (!is_array($items) || empty($items)) {
+                    continue;
+                }
+
+                $schema = collect($items)->map(function ($item) {
+                    $fieldName = $item['Field'];
+                    $nullable = stripos($item['Null'], 'YES') !== false;
+                    $isPrimaryKey = $item['Key'] === 'PRI';
+                    $defaultValue = $item['Default'];
+                    $autoIncrement = $item['Extra'] === 'auto_increment';
+                    $parts = preg_split(Regexp::SPACE_SEP, $item['Type']);
+
+                    if (str_contains($parts[0], '(')) {
+                        $fieldType = StringUtils::substringBefore($parts[0], '(');
+                        $fieldSize = str_replace($fieldType, '', $parts[0]);
+                    } else {
+                        $fieldType = $parts[0];
+                        $fieldSize = '';
+                    }
+
+                    if (!str_starts_with($fieldSize, '(') || !str_ends_with($fieldSize, ')')) {
+                        $fieldSize = '';
+                    } else {
+                        $fieldSize = rtrim(ltrim($fieldSize, '('), ')');
+                    }
+
+                    if (is_numeric($fieldSize)) {
+                        $fieldSize = (int) $fieldSize;
+                    }
+
+                    $unsigned = stripos($item['Type'], 'unsigned') !== false;
+
+                    return compact(
+                        'fieldName',
+                        'fieldType',
+                        'fieldSize',
+                        'unsigned',
+                        'nullable',
+                        'defaultValue',
+                        'autoIncrement',
+                        'isPrimaryKey'
+                    );
+                })->toArray();
+            } catch (Throwable) {
+                $schema = null;
+            }
+
+            if (!is_array($schema) || empty($schema)) {
+                continue;
+            }
+
+            $schemas[$tableName] = $schema;
+        }
+
+        $conn->close();
+        return $schemas;
+    }
+
+    private static function buildTableSchemasFromCacheFile(): array
+    {
+        $dir = FileUtils::getRealpath(self::$cacheDir);
+
+        if (!is_dir($dir)) {
+            return self::buildTableSchemasInternal();
+        }
+
+        $cacheFile = "$dir/table_schemas.php";
+        $schemas = [];
+
+        if (is_file($cacheFile)) {
+            try {
+                $schemas = include($cacheFile);
+            } catch (Throwable) {
+                $schemas = [];
+            }
+        }
+
+        if (is_array($schemas) && !empty($schemas)) {
+            return $schemas;
+        }
+
+        $schemas = self::buildTableSchemasInternal();
+        self::writeTableSchemasToCacheFile($schemas);
+        return $schemas;
     }
 
     private static function writeTableSchemasToCacheFile(array $schemas): void
     {
-        $cacheFile = FileUtils::getRealpath(self::$tableSchemasCacheFile);
-        self::buildTableSchemasCacheFileDir($cacheFile);
+        if (empty($schemas)) {
+            return;
+        }
+
+        $dir = FileUtils::getRealpath(self::$cacheDir);
+
+        if (!is_dir($dir) || !is_writable($dir)) {
+            return;
+        }
+
+        $cacheFile = "$dir/table_schemas.php";
         $fp = fopen($cacheFile, 'w');
 
         if (!is_resource($fp)) {
@@ -783,17 +808,6 @@ final class DB
         fwrite($fp, implode('', $sb));
         flock($fp, LOCK_UN);
         fclose($fp);
-    }
-
-    private static function buildTableSchemasCacheFileDir(string $cacheFile): void
-    {
-        $dir = dirname($cacheFile);
-
-        if (is_dir($dir)) {
-            return;
-        }
-
-        mkdir($dir, 0755, true);
     }
 
     private static function sendToGoBackend(string $cmd, string $query, array $params): array
